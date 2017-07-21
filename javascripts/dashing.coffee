@@ -103,20 +103,9 @@ Dashing.widgets = widgets = {}
 Dashing.lastEvents = lastEvents = {}
 Dashing.debugMode = false
 
-source = new EventSource('events')
-source.addEventListener 'open', (e) ->
-  console.log("Connection opened", e)
-
-source.addEventListener 'error', (e)->
-  console.log("Connection error", e)
-  if (e.currentTarget.readyState == EventSource.CLOSED)
-    console.log("Connection closed")
-    setTimeout (->
-      window.location.reload()
-    ), 5*60*1000
-
-source.addEventListener 'message', (e) ->
-  data = JSON.parse(e.data)
+receiveEvent = (data) ->
+  if Dashing.debugMode
+    console.log('receiveEvent', data, typeof data)
   if lastEvents[data.id]?.updatedAt != data.updatedAt
     if Dashing.debugMode
       console.log("Received data for #{data.id}", data)
@@ -125,12 +114,47 @@ source.addEventListener 'message', (e) ->
       for widget in widgets[data.id]
         widget.receiveData(data)
 
-source.addEventListener 'dashboards', (e) ->
-  data = JSON.parse(e.data)
+receiveDashboardEvent = (data) ->
   if Dashing.debugMode
+    console.log('receiveDashboardEvent', data, typeof data)
     console.log("Received data for dashboards", data)
   if data.dashboard is '*' or window.location.pathname is "/#{data.dashboard}"
     Dashing.fire data.event, data
+
+if (pusherClient?)
+  if Dashing.debugMode
+    console.log('pusher is here!')
+  channel = pusherClient.subscribe 'events'
+  channel.bind 'pusher:subscription_succeeded', () ->
+    $.get('/bootstrap')
+  channel.bind 'event.sent', (message) ->
+    if message.data? && message.event?
+      message.data = JSON.parse(message.data)
+      receiveDashboardEvent message
+    else if message.data?
+      receiveEvent JSON.parse(message.data)
+else
+  if Dashing.debugMode
+    console.log('pusher is not here!')
+  source = new EventSource('events')
+  source.addEventListener 'open', (e) ->
+    console.log("Connection opened", e)
+
+  source.addEventListener 'error', (e)->
+    console.log("Connection error", e)
+    if (e.currentTarget.readyState == EventSource.CLOSED)
+      console.log("Connection closed")
+      setTimeout (->
+        window.location.reload()
+      ), 5*60*1000
+
+  source.addEventListener 'message', (e) ->
+    data = JSON.parse(e.data)
+    receiveEvent data
+
+  source.addEventListener 'dashboards', (e) ->
+    data = JSON.parse(e.data)
+    receiveDashboardEvent data
 
 $(document).ready ->
   Dashing.run()

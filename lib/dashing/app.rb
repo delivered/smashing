@@ -7,8 +7,20 @@ require 'sass'
 require 'json'
 require 'yaml'
 require 'thin'
+require 'pusher'
+require 'dotenv/load'
 
 SCHEDULER = Rufus::Scheduler.new
+
+if ENV['PUSHER_APP_ID'] && ENV['PUSHER_APP_KEY'] && ENV['PUSHER_SECRET']
+  PUSHER = Pusher::Client.new(
+    app_id: ENV['PUSHER_APP_ID'],
+    key: ENV['PUSHER_APP_KEY'],
+    secret: ENV['PUSHER_SECRET'],
+    cluster: 'us2',
+    encrypted: true
+  )
+end
 
 def development?
   ENV['RACK_ENV'] == 'development'
@@ -82,6 +94,17 @@ get '/events', :provides => 'text/event-stream' do
   end
 end
 
+get '/bootstrap' do
+  settings.history.each { |k, v|
+    begin
+      v.gsub!(/^data: /, '')
+      event = JSON.parse(v, symbolize_names: true)
+      send_event(k, event)
+    rescue; end
+  }
+  status 200
+end
+
 get '/:dashboard' do
   protected!
   tilt_html_engines.each do |suffix, _|
@@ -138,10 +161,18 @@ end
 
 def send_event(id, body, target=nil)
   body[:id] = id
-  body[:updatedAt] ||= (Time.now.to_f * 1000.0).to_i 
+  body[:updatedAt] ||= (Time.now.to_f * 1000.0).to_i
+  # Send SSE Event
   event = format_event(body.to_json, target)
   Sinatra::Application.settings.history[id] = event unless target == 'dashboards'
   Sinatra::Application.settings.connections.each { |out| out << event }
+  # Send PUSHER Event
+  if PUSHER
+    PUSHER.trigger('events', 'event.sent', {
+      event: target,
+      data: body.to_json
+    }.delete_if { |key, value| value.to_s.strip == '' })
+  end
 end
 
 def format_event(body, name=nil)
